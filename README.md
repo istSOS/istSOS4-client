@@ -18,21 +18,17 @@ from istsos4_client import Client
 client = Client("http://localhost:8018/istsos4/v1.1")
 ```
 
-With authentication:
+With authentication (logs in at `<base_url>/Login`):
 
 ```python
-from istsos4_client import Client
-from istsos4_client.auth import BearerTokenAuth
-
-auth = BearerTokenAuth(
-    "http://localhost:8018/istsos4/v1.1/Login",
+client = Client(
+    "http://localhost:8018/istsos4/v1.1",
     username="admin",
     password="admin",
 )
-client = Client("http://localhost:8018/istsos4/v1.1", auth=auth)
 ```
 
-The token is refreshed automatically before it expires.
+The bearer token is fetched and refreshed automatically.
 
 ### Create entities
 
@@ -97,6 +93,12 @@ istSOS4 supports commit messages for traceability:
 client.post(obs, commit_message="Nightly import from field logger")
 ```
 
+Batches for a single datastream post in one request:
+
+```python
+client.bulk_observations([obs1, obs2, obs3])
+```
+
 ### Read entities
 
 ```python
@@ -106,6 +108,32 @@ thing = client.get(Thing, 1)
 # All entities of a type (pagination via @iot.nextLink handled automatically)
 things = client.list(Thing)
 observations = client.list(Observation)
+```
+
+### Filter queries
+
+`list()` passes OData query options straight to the server:
+
+```python
+observations = client.list(
+    Observation,
+    filter="phenomenonTime ge 2026-07-01T00:00:00Z and result gt 20",
+    orderby="phenomenonTime",
+)
+```
+
+Supported options: `filter`, `select`, `orderby`, `expand`, `top`.
+Field names in query strings use the server's camelCase form
+(`phenomenonTime`, not `phenomenon_time`). Note that `select` must keep
+the fields the model requires, and `top` sets the server page size —
+`list()` still follows pagination and returns all matches.
+
+### Update entities
+
+```python
+thing = client.get(Thing, 1)
+thing.description = "Moved to the north side of the roof"
+client.patch(thing)     # requires iot_id, set by get()/post()
 ```
 
 ### Time intervals
