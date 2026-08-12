@@ -1,7 +1,42 @@
 from __future__ import annotations
+from typing import Any, Iterator
+from urllib.parse import quote, urlencode
 import requests
 from .models import Entity, Observation
 from ._auth import BearerTokenAuth
+
+OBSERVATION_COMPONENTS = [
+    "result",
+    "phenomenonTime",
+    "resultTime",
+    "resultQuality",
+]
+
+# asyncpg rejects a statement with more than 32767 bound parameters. The server
+# binds one parameter per component plus a handful of bookkeeping columns per
+# row, so keep a single /BulkObservations request comfortably under the cap.
+MAX_ROWS_PER_BULK = int(32767 * 0.9) // (len(OBSERVATION_COMPONENTS) + 8)
+
+
+def raise_for_status(
+    response: requests.Response, context: str | None = None
+) -> None:
+    """requests' raise_for_status, with the server's error body in the message.
+
+    istSOS4 explains rejections in the response body (which datastream is
+    missing, which observation is a duplicate, ...); the default HTTPError
+    message drops it, so callers only ever see the status code.
+    """
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        message = f"{context}: {exc}" if context else str(exc)
+        body = response.text.strip()
+        if body:
+            message = f"{message}; response body: {body}"
+        raise requests.HTTPError(
+            message, response=response, request=response.request
+        ) from exc
 
 
 class Client:
@@ -40,10 +75,7 @@ class Client:
             headers=self._headers(commit_message),
             timeout=self._timeout,
         )
-        if response.status_code not in (200, 201):
-            print(
-                f"Error posting {entity.__class__.__name__}: {response.text}"
-            )
+        raise_for_status(response, f"POST {entity.ENDPOINT}")
         location = response.headers.get("Location")
         if location:
             entity.iot_id = int(location.rsplit("(", 1)[1].rstrip(")"))
@@ -57,10 +89,10 @@ class Client:
             headers=self._headers(),
             timeout=self._timeout,
         )
-        response.raise_for_status()
+        raise_for_status(response, f"GET {entity.ENDPOINT}/{entity_id}")
         return entity.model_validate(response.json())
 
-    def list(
+    def iter_list(
         self,
         entity: type[Entity],
         filter: str | None = None,
@@ -68,13 +100,16 @@ class Client:
         orderby: str | None = None,
         expand: str | None = None,
         top: int | None = None,
-    ) -> list[Entity]:
-        """List all entities of a given type from the istSOS4 server.
+    ) -> Iterator[Entity]:
+        """Yield entities one page at a time, following @iot.nextLink.
+
+        Use this instead of `list()` for collections too large to hold in
+        memory (observation histories, migrations, ...).
 
         Query options are passed through as OData parameters, e.g.
         filter="phenomenonTime ge 2026-01-01T00:00:00Z".
         """
-        params: dict[str, str | int] | None = {
+        params: dict[str, str | int] = {
             f"${key}": value
             for key, value in dict(
                 filter=filter,
@@ -85,26 +120,36 @@ class Client:
             ).items()
             if value is not None
         }
-        entities: list[Entity] = []
         url: str | None = f"{self._base_url}{entity.ENDPOINT}"
+        if params:
+            # requests encodes spaces as '+' by default; OData servers expect
+            # %20. safe="$" keeps the OData $filter/$top keys literal.
+            url = f"{url}?{urlencode(params, safe='$', quote_via=quote)}"
         while url:
             response = requests.get(
                 url,
-                params=params,
                 headers=self._headers(),
                 timeout=self._timeout,
             )
-            params = None  # @iot.nextLink already carries query params
-            response.raise_for_status()
+            raise_for_status(response, f"GET {url}")
             data = response.json()
-            entities.extend(
-                entity.model_validate(item) for item in data.get("value", [])
-            )
+            for item in data.get("value", []):
+                yield entity.model_validate(item)
             url = data.get("@iot.nextLink")
-        return entities
 
-    def patch(self, entity: Entity) -> int:
-        """Patch an entity on the istSOS4 server."""
+    def list(self, entity: type[Entity], **query: Any) -> list[Entity]:
+        """List all entities of a given type from the istSOS4 server.
+
+        Accepts the same query options as `iter_list()`.
+        """
+        return list(self.iter_list(entity, **query))
+
+    def patch(self, entity: Entity, commit_message: str | None = None) -> int:
+        """Patch an entity on the istSOS4 server.
+
+        Only the fields that are set are sent, so a partial update is just a
+        partly-filled entity: Observation(iot_id=7, result=1.5).
+        """
         if entity.iot_id is None:
             raise ValueError(
                 f"Cannot patch {entity.__class__.__name__} without an iot_id. Please ensure the entity has been created and has a valid iot_id."
@@ -112,44 +157,68 @@ class Client:
         response = requests.patch(
             f"{self._base_url}{entity.ENDPOINT}/{entity.iot_id}",
             json=entity.serialize(),
-            headers=self._headers(),
+            headers=self._headers(commit_message),
             timeout=self._timeout,
         )
-        if response.status_code not in (200, 204):
-            print(
-                f"Error patching {entity.__class__.__name__}: {response.text}"
-            )
+        raise_for_status(
+            response, f"PATCH {entity.ENDPOINT}({entity.iot_id})"
+        )
         return response.status_code
 
-    @staticmethod
-    def _datastream_id(obs: Observation) -> int:
-        ds = obs.datastream
-        ds_id = ds.iot_id if isinstance(ds, Entity) else ds
-        if ds_id is None:
-            raise ValueError(
-                "Each observation needs a datastream with an id."
-            )
-        return ds_id
+    def bulk_observations(
+        self,
+        observations: list[Observation],
+        commit_message: str | None = None,
+    ) -> int:
+        """Post observations to /BulkObservations, one dataArray per Datastream.
 
-    def bulk_observations(self, observations: list[Observation]) -> int:
-        """Post a list of observations to a single Datastream."""
+        Returns the number of observations sent. Requests are split so a single
+        one never exceeds the server's parameter limit; duplicates are not
+        filtered out, so the server rejects a batch that repeats a
+        phenomenonTime already stored for the datastream.
+        """
         if not observations:
             raise ValueError("The observations list is empty.")
-        datastream_id = self._datastream_id(observations[0])
-        if any(
-            self._datastream_id(obs) != datastream_id
-            for obs in observations
-        ):
-            raise ValueError(
-                "All observations must belong to the same Datastream."
+        rows_by_datastream: dict[int, list[list[Any]]] = {}
+        for observation in observations:
+            datastream = observation.datastream
+            datastream_id = (
+                datastream.iot_id
+                if isinstance(datastream, Entity)
+                else datastream
             )
-        payload = [obs.serialize() for obs in observations]
-        response = requests.post(
-            f"{self._base_url}/Datastreams({datastream_id})/Observations",
-            json=payload,
-            headers=self._headers(),
-            timeout=self._timeout,
-        )
-        if response.status_code not in (200, 201):
-            print(f"Error posting observations: {response.text}")
-        return response.status_code
+            if datastream_id is None:
+                raise ValueError(
+                    "Each observation needs a datastream with an id."
+                )
+            row = observation.serialize()
+            if "phenomenonTime" not in row:
+                raise ValueError("Each observation needs a phenomenonTime.")
+            rows_by_datastream.setdefault(datastream_id, []).append(
+                [
+                    row.get("result"),
+                    row["phenomenonTime"],
+                    row.get("resultTime", row["phenomenonTime"]),
+                    row.get("resultQuality"),
+                ]
+            )
+
+        sent = 0
+        for datastream_id, rows in rows_by_datastream.items():
+            for offset in range(0, len(rows), MAX_ROWS_PER_BULK):
+                batch = rows[offset : offset + MAX_ROWS_PER_BULK]
+                response = requests.post(
+                    f"{self._base_url}/BulkObservations",
+                    json=[
+                        {
+                            "Datastream": {"@iot.id": datastream_id},
+                            "components": OBSERVATION_COMPONENTS,
+                            "dataArray": batch,
+                        }
+                    ],
+                    headers=self._headers(commit_message),
+                    timeout=self._timeout,
+                )
+                raise_for_status(response, "POST /BulkObservations")
+                sent += len(batch)
+        return sent

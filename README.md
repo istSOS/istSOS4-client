@@ -8,6 +8,8 @@ Python client for [istSOS4](https://github.com/istSOS/istsos4) (OGC SensorThings
 pip install istsos4-client
 ```
 
+Requires Python 3.10+.
+
 ## Usage
 
 ### Connect
@@ -33,7 +35,7 @@ The bearer token is fetched and refreshed automatically.
 ### Create entities
 
 ```python
-from istsos4_client.models import (
+from istsos4_client import (
     Thing, Sensor, ObservedProperty, Datastream,
     UnitOfMeasurement, Observation,
 )
@@ -93,10 +95,12 @@ istSOS4 supports commit messages for traceability:
 client.post(obs, commit_message="Nightly import from field logger")
 ```
 
-Batches for a single datastream post in one request:
+Batches go to `/BulkObservations` as one `dataArray` per datastream, split
+into as many requests as the server's row limit needs. Returns how many
+observations were sent:
 
 ```python
-client.bulk_observations([obs1, obs2, obs3])
+sent = client.bulk_observations([obs1, obs2, obs3])
 ```
 
 ### Read entities
@@ -108,6 +112,11 @@ thing = client.get(Thing, 1)
 # All entities of a type (pagination via @iot.nextLink handled automatically)
 things = client.list(Thing)
 observations = client.list(Observation)
+
+# Same query options, streamed a page at a time — for collections too large
+# to hold in memory
+for obs in client.iter_list(Observation, orderby="phenomenonTime"):
+    ...
 ```
 
 ### Filter queries
@@ -136,13 +145,25 @@ thing.description = "Moved to the north side of the roof"
 client.patch(thing)     # requires iot_id, set by get()/post()
 ```
 
+Only the fields that are set are sent, so a partial update needs no read:
+
+```python
+client.patch(Observation(iot_id=7, result=1.5, result_quality="100"))
+```
+
+### Errors
+
+`get`, `list`, `post`, `patch` and `bulk_observations` raise
+`requests.HTTPError` on a non-2xx response, with the server's error body in
+the message and the response itself on `exc.response`.
+
 ### Time intervals
 
 `phenomenonTime` ranges use the SensorThings `start/end` ISO string encoding,
 exposed as a typed object:
 
 ```python
-from istsos4_client.models import TimeInterval
+from istsos4_client import TimeInterval
 
 obs = Observation(
     phenomenon_time=TimeInterval(

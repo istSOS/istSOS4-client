@@ -32,9 +32,9 @@ class TimeInterval(BaseModel):
 
 
 class UnitOfMeasurement(BaseModel):
-    name: str
-    symbol: str
-    definition: str | None = None  # absent in real istSOS4 payloads
+    name: str | None = None
+    symbol: str | None = None
+    definition: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +220,8 @@ class FeatureOfInterest(Entity):
 class Observation(Entity):
     ENDPOINT: ClassVar[str] = "/Observations"
 
-    phenomenon_time: datetime | TimeInterval
+    # Optional so a partial entity can be PATCHed: Observation(iot_id=7, result=1.5)
+    phenomenon_time: datetime | TimeInterval | None = None
     result: Any = None
     result_time: datetime | None = None
     result_quality: Any = None
