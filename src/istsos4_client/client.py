@@ -85,11 +85,11 @@ class Client:
     def get(self, entity: type[Entity], entity_id: int) -> Entity:
         """Get an entity from the istSOS4 server."""
         response = requests.get(
-            f"{self._base_url}{entity.ENDPOINT}/{entity_id}",
+            f"{self._base_url}{entity.ENDPOINT}({entity_id})",
             headers=self._headers(),
             timeout=self._timeout,
         )
-        raise_for_status(response, f"GET {entity.ENDPOINT}/{entity_id}")
+        raise_for_status(response, f"GET {entity.ENDPOINT}({entity_id})")
         return entity.model_validate(response.json())
 
     def iter_list(
@@ -155,7 +155,7 @@ class Client:
                 f"Cannot patch {entity.__class__.__name__} without an iot_id. Please ensure the entity has been created and has a valid iot_id."
             )
         response = requests.patch(
-            f"{self._base_url}{entity.ENDPOINT}/{entity.iot_id}",
+            f"{self._base_url}{entity.ENDPOINT}({entity.iot_id})",
             json=entity.serialize(),
             headers=self._headers(commit_message),
             timeout=self._timeout,

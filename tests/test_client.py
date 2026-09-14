@@ -98,7 +98,7 @@ def test_get_returns_entity():
         user = Client("http://x/v1.1").get(User, 3)
     assert isinstance(user, User)
     assert user.iot_id == 3
-    assert get.call_args.args[0] == "http://x/v1.1/Users/3"
+    assert get.call_args.args[0] == "http://x/v1.1/Users(3)"
 
 
 def test_get_raises_on_http_error():
@@ -307,7 +307,7 @@ def test_patch_sends_only_the_fields_that_are_set():
             Observation(iot_id=7, result=1.5, result_quality="100")
         )
     assert status == 200
-    assert req.call_args.args[0] == "http://x/v1.1/Observations/7"
+    assert req.call_args.args[0] == "http://x/v1.1/Observations(7)"
     assert req.call_args.kwargs["json"] == {
         "result": 1.5,
         "resultQuality": "100",
