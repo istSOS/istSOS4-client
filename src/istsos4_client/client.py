@@ -39,6 +39,18 @@ def raise_for_status(
         ) from exc
 
 
+def _uses_staplus(value: Any) -> bool:
+    """True if value is a STAplus entity class, or an entity that is or embeds
+    one (deep insert)."""
+    if isinstance(value, type):
+        return issubclass(value, Entity) and value.STAPLUS
+    if isinstance(value, Entity):
+        return value.STAPLUS or any(map(_uses_staplus, vars(value).values()))
+    if isinstance(value, list):
+        return any(map(_uses_staplus, value))
+    return False
+
+
 class Client:
     """Client for an istSOS4 server instance."""
 
@@ -48,7 +60,10 @@ class Client:
         username: str | None = None,
         password: str | None = None,
         timeout: float = 30.0,
+        staplus: bool = False,
     ):
+        """staplus=True enables the STAplus entities in istsos4_client.staplus
+        (the server must be an istSOS4 build with STAplus support)."""
         self._base_url = base_url.rstrip("/")
         self._auth = (
             BearerTokenAuth(f"{self._base_url}/Login", username, password)
@@ -56,6 +71,7 @@ class Client:
             else None
         )
         self._timeout = timeout
+        self._staplus = staplus
 
     @property
     def base_url(self) -> str:
@@ -67,8 +83,15 @@ class Client:
             headers["commit-message"] = commit_message
         return headers
 
+    def _check_staplus(self, entity: Entity | type[Entity]) -> None:
+        if not self._staplus and _uses_staplus(entity):
+            raise ValueError(
+                "STAplus entities need Client(..., staplus=True)."
+            )
+
     def post(self, entity: Entity, commit_message: str | None = None) -> int:
         """Post an entity to the istSOS4 server."""
+        self._check_staplus(entity)
         response = requests.post(
             f"{self._base_url}{entity.ENDPOINT}",
             json=entity.serialize(),
@@ -84,6 +107,7 @@ class Client:
 
     def get(self, entity: type[Entity], entity_id: int) -> Entity:
         """Get an entity from the istSOS4 server."""
+        self._check_staplus(entity)
         response = requests.get(
             f"{self._base_url}{entity.ENDPOINT}({entity_id})",
             headers=self._headers(),
@@ -109,6 +133,7 @@ class Client:
         Query options are passed through as OData parameters, e.g.
         filter="phenomenonTime ge 2026-01-01T00:00:00Z".
         """
+        self._check_staplus(entity)
         params: dict[str, str | int] = {
             f"${key}": value
             for key, value in dict(
@@ -154,6 +179,7 @@ class Client:
             raise ValueError(
                 f"Cannot patch {entity.__class__.__name__} without an iot_id. Please ensure the entity has been created and has a valid iot_id."
             )
+        self._check_staplus(entity)
         response = requests.patch(
             f"{self._base_url}{entity.ENDPOINT}({entity.iot_id})",
             json=entity.serialize(),

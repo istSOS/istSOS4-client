@@ -181,6 +181,22 @@ obs = Observation(
 `Datastream`, `FeatureOfInterest`, `Observation`, plus istSOS4-specific
 `Network`, `User`, and `Policy`.
 
+### STAplus
+
+STAplus entities live in `istsos4_client.staplus` and need an istSOS4 build
+with STAplus support. The client refuses them unless enabled at init:
+
+```python
+from istsos4_client import staplus
+
+client = Client("http://localhost:8018/istsos4/v1.1", staplus=True)
+party = staplus.Party(role="individual", display_name="Jo")
+client.post(party)
+client.post(staplus.Datastream(..., party=party))  # Datastream + Party link
+```
+
+Available: `Party`, and `Datastream` (the base one plus its `party` relation).
+
 ## License
 
 Apache-2.0

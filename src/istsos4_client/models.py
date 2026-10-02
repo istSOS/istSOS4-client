@@ -52,6 +52,7 @@ class Entity(BaseModel):
     )
 
     ENDPOINT: ClassVar[str]
+    STAPLUS: ClassVar[bool] = False  # see staplus.py
 
     # Read-only server fields: parsed from GETs, never sent back.
     iot_id: int | None = Field(None, alias="@iot.id", exclude=True)

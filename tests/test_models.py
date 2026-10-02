@@ -393,3 +393,29 @@ class TestRelations:
         assert thing.locations[0].iot_id == 1
         # and re-serializing links rather than re-embedding:
         assert thing.serialize()["Locations"] == [{"@iot.id": 1}]
+
+
+class TestParty:
+    def test_camel_case_and_datastream_link(self):
+        from istsos4_client import staplus
+
+        party = staplus.Party(
+            role="individual", display_name="Jo", auth_id="x:1"
+        )
+        assert party.serialize() == {
+            "role": "individual",
+            "displayName": "Jo",
+            "authId": "x:1",
+        }
+        party.iot_id = 7
+        ds = staplus.Datastream(
+            name="d",
+            description="",
+            unit_of_measurement=UnitOfMeasurement(),
+            observation_type="t",
+            party=party,
+        )
+        assert ds.serialize()["Party"] == {"@iot.id": 7}
+
+    def test_base_datastream_has_no_party(self):
+        assert "party" not in Datastream.model_fields

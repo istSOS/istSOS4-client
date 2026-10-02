@@ -325,3 +325,44 @@ def test_patch_raises_on_http_error():
     with patch("istsos4_client.client.requests.patch", return_value=resp):
         with pytest.raises(requests.HTTPError, match="conflict"):
             Client("http://x").patch(User(iot_id=1, username="a", role="v"))
+
+
+# ---------------------------------------------------------------------------
+# STAplus gate
+# ---------------------------------------------------------------------------
+
+
+def test_staplus_entities_need_opt_in():
+    from istsos4_client import staplus
+    from istsos4_client.models import Observation
+
+    party = staplus.Party(role="individual")
+    # nested deep insert is caught too
+    obs = Observation(
+        result=1,
+        datastream=staplus.Datastream(
+            name="d",
+            description="",
+            unit_of_measurement={},
+            observation_type="t",
+            party=party,
+        ),
+    )
+    c = Client("http://x")
+    with patch("istsos4_client.client.requests") as req:
+        for call in (
+            lambda: c.post(party),
+            lambda: c.post(obs),
+            lambda: c.get(staplus.Party, 1),
+            lambda: c.list(staplus.Datastream),
+        ):
+            with pytest.raises(ValueError, match="staplus=True"):
+                call()
+        req.post.assert_not_called()
+        req.get.assert_not_called()
+
+        req.post.return_value = make_response(
+            status=201, headers={"Location": "http://x/Parties(5)"}
+        )
+        assert Client("http://x", staplus=True).post(party) == 201
+    assert party.iot_id == 5

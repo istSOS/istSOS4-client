@@ -1,6 +1,6 @@
 """Python client for istSOS4 (OGC SensorThings API)."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from .client import (
     MAX_ROWS_PER_BULK,
