@@ -3,11 +3,8 @@ from unittest.mock import Mock, patch
 import pytest
 import requests
 
-from istsos4_client import (
-    MAX_ROWS_PER_BULK,
-    OBSERVATION_COMPONENTS,
-    Client,
-)
+from istsos4_client import Client
+from istsos4_client.client import MAX_ROWS_PER_BULK, OBSERVATION_COMPONENTS
 from istsos4_client.models import User
 
 
@@ -99,6 +96,34 @@ def test_get_returns_entity():
     assert isinstance(user, User)
     assert user.iot_id == 3
     assert get.call_args.args[0] == "http://x/v1.1/Users(3)"
+
+
+def test_get_with_expand_embeds_related_entity():
+    from istsos4_client.models import Datastream, Observation
+
+    resp = make_response(
+        {
+            "@iot.id": 7,
+            "result": 1.5,
+            "Datastream": {
+                "@iot.id": 3,
+                "name": "T",
+                "description": "d",
+                "unitOfMeasurement": {},
+                "observationType": "o",
+            },
+        }
+    )
+    with patch(
+        "istsos4_client.client.requests.get", return_value=resp
+    ) as get:
+        obs = Client("http://x/v1.1").get(Observation, 7, expand="Datastream")
+    assert (
+        get.call_args.args[0]
+        == "http://x/v1.1/Observations(7)?$expand=Datastream"
+    )
+    assert isinstance(obs.datastream, Datastream)
+    assert obs.datastream.iot_id == 3
 
 
 def test_get_raises_on_http_error():

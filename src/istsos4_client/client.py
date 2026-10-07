@@ -105,11 +105,19 @@ class Client:
 
         return response.status_code
 
-    def get(self, entity: type[Entity], entity_id: int) -> Entity:
-        """Get an entity from the istSOS4 server."""
+    def get(
+        self, entity: type[Entity], entity_id: int, expand: str | None = None
+    ) -> Entity:
+        """Get an entity from the istSOS4 server.
+
+        `expand` is passed through as OData $expand, e.g. expand="Datastream".
+        """
         self._check_staplus(entity)
+        url = f"{self._base_url}{entity.ENDPOINT}({entity_id})"
+        if expand:
+            url = f"{url}?{urlencode({'$expand': expand}, safe='$', quote_via=quote)}"
         response = requests.get(
-            f"{self._base_url}{entity.ENDPOINT}({entity_id})",
+            url,
             headers=self._headers(),
             timeout=self._timeout,
         )
@@ -186,14 +194,13 @@ class Client:
             headers=self._headers(commit_message),
             timeout=self._timeout,
         )
-        raise_for_status(
-            response, f"PATCH {entity.ENDPOINT}({entity.iot_id})"
-        )
+        raise_for_status(response, f"PATCH {entity.ENDPOINT}({entity.iot_id})")
         return response.status_code
 
     def bulk_observations(
         self,
         observations: list[Observation],
+        force=False,
         commit_message: str | None = None,
     ) -> int:
         """Post observations to /BulkObservations, one dataArray per Datastream.
@@ -243,6 +250,7 @@ class Client:
                         }
                     ],
                     headers=self._headers(commit_message),
+                    params={"force": "true"} if force else None,
                     timeout=self._timeout,
                 )
                 raise_for_status(response, "POST /BulkObservations")

@@ -109,6 +109,10 @@ sent = client.bulk_observations([obs1, obs2, obs3])
 # Single entity by id
 thing = client.get(Thing, 1)
 
+# Embed a related entity instead of just a link
+obs = client.get(Observation, 7, expand="Datastream")
+obs.datastream.properties   # a full Datastream, not None
+
 # All entities of a type (pagination via @iot.nextLink handled automatically)
 things = client.list(Thing)
 observations = client.list(Observation)
@@ -131,7 +135,8 @@ observations = client.list(
 )
 ```
 
-Supported options: `filter`, `select`, `orderby`, `expand`, `top`.
+Supported options: `filter`, `select`, `orderby`, `expand`, `top`
+(`get()` takes `expand` only).
 Field names in query strings use the server's camelCase form
 (`phenomenonTime`, not `phenomenon_time`). Note that `select` must keep
 the fields the model requires, and `top` sets the server page size —

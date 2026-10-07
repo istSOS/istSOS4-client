@@ -2,12 +2,7 @@
 
 __version__ = "0.2.0"
 
-from .client import (
-    MAX_ROWS_PER_BULK,
-    OBSERVATION_COMPONENTS,
-    Client,
-    raise_for_status,
-)
+from .client import Client, raise_for_status
 from .models import (
     Datastream,
     Entity,
@@ -24,10 +19,9 @@ from .models import (
     UnitOfMeasurement,
     User,
 )
+from .utils import decode_result_quality
 
 __all__ = [
-    "MAX_ROWS_PER_BULK",
-    "OBSERVATION_COMPONENTS",
     "Client",
     "raise_for_status",
     "Datastream",
@@ -44,4 +38,5 @@ __all__ = [
     "TimeInterval",
     "UnitOfMeasurement",
     "User",
+    "decode_result_quality",
 ]
