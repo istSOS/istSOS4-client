@@ -46,19 +46,28 @@ def test_decode_result_quality_legend():
     decoded = decode_result_quality(0b1110, CONSTRAINTS[:1], legend=True)
     assert decoded[0]["color"] == "#f9a825"  # filled
     assert decoded[1]["color"] == "#2e7d32"  # passed
+    colors = ["c0", "orange", "c2", "c3", "#00ff00", "c5", "c6", "c7"]
+    decoded = decode_result_quality(
+        0b1110, CONSTRAINTS[:1], legend=True, status_colors=colors
+    )
+    assert decoded[0]["color"] == "orange"  # filled, 2nd in the order
+    assert decoded[1]["color"] == "#00ff00"  # passed, 5th in the order
+    with pytest.raises(ValueError):
+        decode_result_quality(0b1110, legend=True, status_colors=colors[:2])
 
 
 def test_decode_result_quality_oasi():
-    assert decode_result_quality("8", oasi=True, legend=True) == [
-        {
-            "id": 0,
-            "status": "Good (correction applied)",
-            "description": "HQC",
-            "color": "#00897b",
-        }
+    def score(mask, constraints=CONSTRAINTS):
+        return [e["id"] for e in decode_result_quality(mask, constraints, oasi=True)]
+
+    assert decode_result_quality(0b11, CONSTRAINTS, legend=True, oasi=True) == [
+        {"id": 0, "status": "AQC0", "description": "Raw data", "color": "#9e9e9e"}
     ]
-    assert decode_result_quality(0b11, CONSTRAINTS, oasi=True) == [
-        {"id": 0, "status": "Good", "description": "AQC1"}  # not a bitmask
-    ]
-    with pytest.raises(ValueError):
-        decode_result_quality(4, oasi=True)  # gap in the OASI table
+    assert score(0b0010101011) == [1]  # all failed
+    assert score(0b0011101111) == [2]  # one failed
+    assert score(0b0011111111) == [3]  # all passed
+    assert score(0b1011111111) == [6]  # human failed
+    assert score(0b1110101011) == [10]  # human passed wins over checks
+    assert score(0b0000001111) == [2]  # passed + not executed: suspect
+    assert score(0b10, []) == []  # filled, nothing else: unmapped
+    assert score(0, []) == []  # no data
