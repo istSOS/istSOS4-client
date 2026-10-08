@@ -35,4 +35,7 @@ class BearerTokenAuth:
         resp.raise_for_status()
         data = resp.json()
         self._token = data["access_token"]
-        self._expires_at = time.time() + float(data["expires_in"])
+        expires_in = float(data["expires_in"])
+        self._expires_at = (
+            expires_in if expires_in > 1e9 else time.time() + expires_in
+        )

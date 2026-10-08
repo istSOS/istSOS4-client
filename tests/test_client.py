@@ -391,3 +391,50 @@ def test_staplus_entities_need_opt_in():
         )
         assert Client("http://x", staplus=True).post(party) == 201
     assert party.iot_id == 5
+
+
+# ---------------------------------------------------------------------------
+# retry
+# ---------------------------------------------------------------------------
+
+
+def test_retries_unavailable_and_connection_errors_then_succeeds():
+    ok = make_response({"value": []})
+    with patch(
+        "istsos4_client.client.requests.get",
+        side_effect=[make_response(status=503), requests.ConnectionError(), ok],
+    ) as get, patch("istsos4_client.client.time.sleep") as sleep:
+        assert Client("http://x", retry_delay=2).list(User) == []
+    assert get.call_count == 3
+    assert [c.args for c in sleep.call_args_list] == [(2,), (2,)]
+
+
+def test_gives_up_after_max_retries():
+    with patch(
+        "istsos4_client.client.requests.get",
+        return_value=make_response(status=503),
+    ) as get, patch("istsos4_client.client.time.sleep"):
+        with pytest.raises(requests.HTTPError):
+            Client("http://x", max_retries=2).get(User, 1)
+    assert get.call_count == 3  # first try + 2 retries
+
+
+def test_last_connection_error_is_raised():
+    with patch(
+        "istsos4_client.client.requests.get",
+        side_effect=requests.ConnectionError("down"),
+    ) as get, patch("istsos4_client.client.time.sleep"):
+        with pytest.raises(requests.ConnectionError):
+            Client("http://x", max_retries=1).get(User, 1)
+    assert get.call_count == 2
+
+
+def test_no_retry_on_500_or_when_disabled():
+    for client, status in ((Client("http://x"), 500), (Client("http://x", max_retries=0), 503)):
+        with patch(
+            "istsos4_client.client.requests.get",
+            return_value=make_response(status=status),
+        ) as get:
+            with pytest.raises(requests.HTTPError):
+                client.get(User, 1)
+        assert get.call_count == 1

@@ -32,6 +32,13 @@ client = Client(
 
 The bearer token is fetched and refreshed automatically.
 
+Requests that fail with a connection error, a timeout or a 408, 429, 502,
+503 or 504 response are retried, by default 3 times, 1 second apart:
+
+```python
+client = Client(url, max_retries=5, retry_delay=2.0)  # max_retries=0 disables it
+```
+
 ### Create entities
 
 ```python

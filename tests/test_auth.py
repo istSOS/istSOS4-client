@@ -46,6 +46,18 @@ def test_expires_at_is_absolute_not_duration():
     assert before + 3600 <= a._expires_at <= time.time() + 3600
 
 
+def test_expires_in_as_epoch_timestamp():
+    # istSOS4 sends the expiry time itself, not a lifetime in seconds
+    expiry = time.time() + 3600
+    a = auth()
+    with patch(
+        "istsos4_client._auth.requests.post",
+        return_value=make_token_response(expires_in=expiry),
+    ):
+        a.refresh()
+    assert a._expires_at == expiry
+
+
 def test_headers_refreshes_within_leeway_of_expiry():
     a = BearerTokenAuth("http://x/Login", "admin", "admin", leeway=30)
     with patch(

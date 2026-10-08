@@ -1,5 +1,6 @@
 from __future__ import annotations
-from typing import Any, Iterator
+import time
+from typing import Any, Callable, Iterator
 from urllib.parse import quote, urlencode
 import requests
 from .models import Entity, Observation
@@ -16,6 +17,11 @@ OBSERVATION_COMPONENTS = [
 # binds one parameter per component plus a handful of bookkeeping columns per
 # row, so keep a single /BulkObservations request comfortably under the cap.
 MAX_ROWS_PER_BULK = int(32767 * 0.9) // (len(OBSERVATION_COMPONENTS) + 8)
+
+# Responses worth sending again: the server did not handle the request
+# (timeout, rate limit, proxy or server unavailable). A 500 is not retried,
+# the request may already have been applied.
+RETRY_STATUSES = {408, 429, 502, 503, 504}
 
 
 def raise_for_status(
@@ -61,9 +67,17 @@ class Client:
         password: str | None = None,
         timeout: float = 30.0,
         staplus: bool = False,
+        max_retries: int = 3,
+        retry_delay: float = 1.0,
     ):
         """staplus=True enables the STAplus entities in istsos4_client.staplus
-        (the server must be an istSOS4 build with STAplus support)."""
+        (the server must be an istSOS4 build with STAplus support).
+
+        A request that fails with a connection error, a timeout or one of
+        RETRY_STATUSES is sent again up to `max_retries` times, waiting
+        `retry_delay` seconds in between; max_retries=0 disables it. A POST
+        whose first attempt did reach the server before timing out can come
+        back as a duplicate error on the retry."""
         self._base_url = base_url.rstrip("/")
         self._auth = (
             BearerTokenAuth(f"{self._base_url}/Login", username, password)
@@ -72,6 +86,8 @@ class Client:
         )
         self._timeout = timeout
         self._staplus = staplus
+        self._max_retries = max_retries
+        self._retry_delay = retry_delay
 
     @property
     def base_url(self) -> str:
@@ -83,6 +99,24 @@ class Client:
             headers["commit-message"] = commit_message
         return headers
 
+    def _send(
+        self, send: Callable[..., requests.Response], url: str, **kwargs: Any
+    ) -> requests.Response:
+        """Call `send` (requests.get/post/patch), retrying as described in
+        __init__. Returns the last response, or raises the last error."""
+        for attempt in range(self._max_retries + 1):
+            last = attempt == self._max_retries
+            try:
+                response = send(url, timeout=self._timeout, **kwargs)
+            except (requests.ConnectionError, requests.Timeout):
+                if last:
+                    raise
+            else:
+                if last or response.status_code not in RETRY_STATUSES:
+                    return response
+            time.sleep(self._retry_delay)
+        raise AssertionError("unreachable")
+
     def _check_staplus(self, entity: Entity | type[Entity]) -> None:
         if not self._staplus and _uses_staplus(entity):
             raise ValueError(
@@ -92,11 +126,11 @@ class Client:
     def post(self, entity: Entity, commit_message: str | None = None) -> int:
         """Post an entity to the istSOS4 server."""
         self._check_staplus(entity)
-        response = requests.post(
+        response = self._send(
+            requests.post,
             f"{self._base_url}{entity.ENDPOINT}",
             json=entity.serialize(),
             headers=self._headers(commit_message),
-            timeout=self._timeout,
         )
         raise_for_status(response, f"POST {entity.ENDPOINT}")
         location = response.headers.get("Location")
@@ -116,11 +150,7 @@ class Client:
         url = f"{self._base_url}{entity.ENDPOINT}({entity_id})"
         if expand:
             url = f"{url}?{urlencode({'$expand': expand}, safe='$', quote_via=quote)}"
-        response = requests.get(
-            url,
-            headers=self._headers(),
-            timeout=self._timeout,
-        )
+        response = self._send(requests.get, url, headers=self._headers())
         raise_for_status(response, f"GET {entity.ENDPOINT}({entity_id})")
         return entity.model_validate(response.json())
 
@@ -159,11 +189,7 @@ class Client:
             # %20. safe="$" keeps the OData $filter/$top keys literal.
             url = f"{url}?{urlencode(params, safe='$', quote_via=quote)}"
         while url:
-            response = requests.get(
-                url,
-                headers=self._headers(),
-                timeout=self._timeout,
-            )
+            response = self._send(requests.get, url, headers=self._headers())
             raise_for_status(response, f"GET {url}")
             data = response.json()
             for item in data.get("value", []):
@@ -188,11 +214,11 @@ class Client:
                 f"Cannot patch {entity.__class__.__name__} without an iot_id. Please ensure the entity has been created and has a valid iot_id."
             )
         self._check_staplus(entity)
-        response = requests.patch(
+        response = self._send(
+            requests.patch,
             f"{self._base_url}{entity.ENDPOINT}({entity.iot_id})",
             json=entity.serialize(),
             headers=self._headers(commit_message),
-            timeout=self._timeout,
         )
         raise_for_status(response, f"PATCH {entity.ENDPOINT}({entity.iot_id})")
         return response.status_code
@@ -240,7 +266,8 @@ class Client:
         for datastream_id, rows in rows_by_datastream.items():
             for offset in range(0, len(rows), MAX_ROWS_PER_BULK):
                 batch = rows[offset : offset + MAX_ROWS_PER_BULK]
-                response = requests.post(
+                response = self._send(
+                    requests.post,
                     f"{self._base_url}/BulkObservations",
                     json=[
                         {
@@ -251,7 +278,6 @@ class Client:
                     ],
                     headers=self._headers(commit_message),
                     params={"force": "true"} if force else None,
-                    timeout=self._timeout,
                 )
                 raise_for_status(response, "POST /BulkObservations")
                 sent += len(batch)
