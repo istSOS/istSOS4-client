@@ -1,6 +1,6 @@
 """Python client for istSOS4 (OGC SensorThings API)."""
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from .client import Client, raise_for_status
 from .models import (
