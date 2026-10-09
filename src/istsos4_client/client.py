@@ -45,6 +45,18 @@ def raise_for_status(
         ) from exc
 
 
+def _odata_query(**options: Any) -> str:
+    """'?$key=value&...' for the OData options that are set, '' if none."""
+    params = {
+        f"${key}": value for key, value in options.items() if value is not None
+    }
+    if not params:
+        return ""
+    # requests encodes spaces as '+' by default; OData servers expect %20.
+    # safe="$" keeps the OData $filter/$top keys literal.
+    return f"?{urlencode(params, safe='$', quote_via=quote)}"
+
+
 def _uses_staplus(value: Any) -> bool:
     """True if value is a STAplus entity class, or an entity that is or embeds
     one (deep insert)."""
@@ -140,16 +152,20 @@ class Client:
         return response.status_code
 
     def get(
-        self, entity: type[Entity], entity_id: int, expand: str | None = None
+        self,
+        entity: type[Entity],
+        entity_id: int,
+        expand: str | None = None,
+        filter: str | None = None,
     ) -> Entity:
         """Get an entity from the istSOS4 server.
 
-        `expand` is passed through as OData $expand, e.g. expand="Datastream".
+        `expand` and `filter` are passed through as OData $expand and $filter,
+        e.g. expand="Datastream".
         """
         self._check_staplus(entity)
         url = f"{self._base_url}{entity.ENDPOINT}({entity_id})"
-        if expand:
-            url = f"{url}?{urlencode({'$expand': expand}, safe='$', quote_via=quote)}"
+        url += _odata_query(expand=expand, filter=filter)
         response = self._send(requests.get, url, headers=self._headers())
         raise_for_status(response, f"GET {entity.ENDPOINT}({entity_id})")
         return entity.model_validate(response.json())
@@ -172,22 +188,9 @@ class Client:
         filter="phenomenonTime ge 2026-01-01T00:00:00Z".
         """
         self._check_staplus(entity)
-        params: dict[str, str | int] = {
-            f"${key}": value
-            for key, value in dict(
-                filter=filter,
-                select=select,
-                orderby=orderby,
-                expand=expand,
-                top=top,
-            ).items()
-            if value is not None
-        }
-        url: str | None = f"{self._base_url}{entity.ENDPOINT}"
-        if params:
-            # requests encodes spaces as '+' by default; OData servers expect
-            # %20. safe="$" keeps the OData $filter/$top keys literal.
-            url = f"{url}?{urlencode(params, safe='$', quote_via=quote)}"
+        url: str | None = f"{self._base_url}{entity.ENDPOINT}" + _odata_query(
+            filter=filter, select=select, orderby=orderby, expand=expand, top=top
+        )
         while url:
             response = self._send(requests.get, url, headers=self._headers())
             raise_for_status(response, f"GET {url}")
@@ -203,11 +206,19 @@ class Client:
         """
         return list(self.iter_list(entity, **query))
 
-    def patch(self, entity: Entity, commit_message: str | None = None) -> int:
+    def patch(
+        self,
+        entity: Entity,
+        commit_message: str | None = None,
+        filter: str | None = None,
+    ) -> int:
         """Patch an entity on the istSOS4 server.
 
         Only the fields that are set are sent, so a partial update is just a
         partly-filled entity: Observation(iot_id=7, result=1.5).
+
+        `filter` is passed through as OData $filter, e.g.
+        filter="phenomenonTime eq '2026-07-15T10:00:00Z'".
         """
         if entity.iot_id is None:
             raise ValueError(
@@ -216,7 +227,8 @@ class Client:
         self._check_staplus(entity)
         response = self._send(
             requests.patch,
-            f"{self._base_url}{entity.ENDPOINT}({entity.iot_id})",
+            f"{self._base_url}{entity.ENDPOINT}({entity.iot_id})"
+            + _odata_query(filter=filter),
             json=entity.serialize(),
             headers=self._headers(commit_message),
         )

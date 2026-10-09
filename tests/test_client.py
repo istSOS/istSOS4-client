@@ -339,6 +339,23 @@ def test_patch_sends_only_the_fields_that_are_set():
     }
 
 
+def test_patch_with_filter():
+    from istsos4_client.models import Observation
+
+    resp = make_response(status=200)
+    with patch(
+        "istsos4_client.client.requests.patch", return_value=resp
+    ) as req:
+        Client("http://x/v1.1").patch(
+            Observation(iot_id=7, result=1.5),
+            filter="phenomenonTime eq '2026-07-15T10:00:00Z'",
+        )
+    assert req.call_args.args[0] == (
+        "http://x/v1.1/Observations(7)"
+        "?$filter=phenomenonTime%20eq%20%272026-07-15T10%3A00%3A00Z%27"
+    )
+
+
 def test_patch_without_iot_id_raises():
     with pytest.raises(ValueError):
         Client("http://x").patch(User(username="a", role="viewer"))
