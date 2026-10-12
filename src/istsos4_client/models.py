@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, ClassVar
+from typing import Any, ClassVar, TypeVar
 
 from pydantic import (
     BaseModel,
@@ -62,8 +62,11 @@ class Entity(BaseModel):
         return self.model_dump(mode="json", by_alias=True, exclude_none=True)
 
     @classmethod
-    def deserialize(cls, data: dict[str, Any]) -> "Entity":
+    def deserialize(cls: type["EntityT"], data: dict[str, Any]) -> "EntityT":
         return cls.model_validate(data)
+
+
+EntityT = TypeVar("EntityT", bound=Entity)  # "the same Entity subclass"
 
 
 def _link_or_embed(value: Any) -> Any:
@@ -71,7 +74,10 @@ def _link_or_embed(value: Any) -> Any:
     42                         -> {"@iot.id": 42}   shallow link
     Entity with iot_id set     -> {"@iot.id": ...}  shallow link (reuse!)
     Entity without iot_id      -> nested JSON       deep insert
+    list                       -> each item as above
     """
+    if isinstance(value, list):
+        return [_link_or_embed(item) for item in value]
     if isinstance(value, int):
         return {"@iot.id": value}
     if isinstance(value, Entity):
@@ -143,7 +149,7 @@ class Thing(Entity):
 
     @field_serializer("locations")
     def _rel(self, v: Any) -> Any:
-        return v if v is None else [_link_or_embed(item) for item in v]
+        return _link_or_embed(v)
 
 
 class HistoricalLocation(Entity):
@@ -157,13 +163,9 @@ class HistoricalLocation(Entity):
     thing: int | Thing | None = Field(None, alias="Thing")
     locations: list[int | Location] | None = Field(None, alias="Locations")
 
-    @field_serializer("thing")
-    def _rel_one(self, v: Any) -> Any:
+    @field_serializer("thing", "locations")
+    def _rel(self, v: Any) -> Any:
         return _link_or_embed(v)
-
-    @field_serializer("locations")
-    def _rel_many(self, v: Any) -> Any:
-        return v if v is None else [_link_or_embed(item) for item in v]
 
 
 class Sensor(Entity):

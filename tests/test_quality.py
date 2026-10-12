@@ -2,11 +2,16 @@ import json
 
 import pytest
 
-from istsos4_client.utils import decode_result_quality
+from istsos4_client.quality import decode_result_quality, oasi_quality
 
 CONSTRAINTS = [
     {"type": "flagRange", "column": "result", "min": 1, "max": 100},
-    {"type": "flagConstants", "column": "result", "thresh": 0.1, "window": "3h"},
+    {
+        "type": "flagConstants",
+        "column": "result",
+        "thresh": 0.1,
+        "window": "3h",
+    },
     {"type": "flagZScore", "column": "result", "thresh": 3, "center": False},
 ]
 
@@ -56,18 +61,22 @@ def test_decode_result_quality_legend():
         decode_result_quality(0b1110, legend=True, status_colors=colors[:2])
 
 
-def test_decode_result_quality_oasi():
+def test_oasi_quality():
     def score(mask, constraints=CONSTRAINTS):
-        return [e["id"] for e in decode_result_quality(mask, constraints, oasi=True)]
+        result = oasi_quality(mask, constraints)
+        return result and result["id"]
 
-    assert decode_result_quality(0b11, CONSTRAINTS, legend=True, oasi=True) == [
-        {"id": 0, "status": "AQC0", "description": "Raw data", "color": "#9e9e9e"}
-    ]
-    assert score(0b0010101011) == [1]  # all failed
-    assert score(0b0011101111) == [2]  # one failed
-    assert score(0b0011111111) == [3]  # all passed
-    assert score(0b1011111111) == [6]  # human failed
-    assert score(0b1110101011) == [10]  # human passed wins over checks
-    assert score(0b0000001111) == [2]  # passed + not executed: suspect
-    assert score(0b10, []) == []  # filled, nothing else: unmapped
-    assert score(0, []) == []  # no data
+    assert oasi_quality(0b11, CONSTRAINTS, legend=True) == {
+        "id": 0,
+        "status": "AQC0",
+        "description": "raw data",
+        "color": "#9e9e9e",
+    }
+    assert score(0b0010101011) == 1  # all failed
+    assert score(0b0011101111) == 2  # one failed
+    assert score(0b0011111111) == 3  # all passed
+    assert score(0b1011111111) == 6  # human failed
+    assert score(0b1110101011) == 10  # human passed wins over checks
+    assert score(0b0000001111) == 2  # passed + not executed: suspect
+    assert score(0b10, []) is None  # filled, nothing else: unmapped
+    assert score(0, []) is None  # no data

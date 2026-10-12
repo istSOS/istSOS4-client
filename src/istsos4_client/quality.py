@@ -13,12 +13,7 @@ CONSTRAINT_STATUS = {
     0b00: "not executed",
     0b01: "unused",
 }
-HUMAN_STATUS = {
-    0b11: "passed",
-    0b10: "failed",
-    0b00: "not executed",
-    0b01: "unused",
-}
+HUMAN_STATUS = CONSTRAINT_STATUS
 # Default legend colors. A custom ``status_colors`` list follows this order.
 STATUS_COLORS = {
     "raw": "#9e9e9e",
@@ -48,7 +43,6 @@ def decode_result_quality(
     result_quality: int | str,
     constraints: list[dict[str, Any]] | str | None = None,
     legend: bool = False,
-    oasi: bool = False,
     status_colors: list[Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Decode a resultQuality bitmask into a readable list, one entry per pair.
@@ -80,20 +74,6 @@ def decode_result_quality(
         passed, failed, not executed, unused
     Values are used as given: hex "#2e7d32", a name like "green", or anything
     else your plotting tool understands.
-
-    ``oasi=True`` maps the decoded mask to a single OASI score (see
-    OASI_QUALITY): id is the score, status the level, description the label.
-    Human review wins over the constraints:
-        human passed                         -> 10 HQC  Good
-        human failed                         ->  6 HQC  Corrupted
-        all constraints passed               ->  3 AQC1 Good
-        some constraints failed, or only
-        some executed (rest passed)          ->  2 AQC1 Suspect
-        all constraints failed               ->  1 AQC0 Corrupted
-        data raw, no constraint executed     ->  0 AQC0 Raw data
-    Any other combination has no OASI equivalent and returns [].
-    The example mask above -> [{"id": 10, "status": "HQC",
-                                "description": "Good"}]
 
     Raises ValueError if the mask is negative, not an integer, or has bits
     set beyond the human pair, or if ``status_colors`` has the wrong length.
@@ -145,11 +125,38 @@ def decode_result_quality(
         if legend:
             entry["color"] = colors[status]
         decoded.append(entry)
-    if not oasi:
-        return decoded
+    return decoded
 
-    checks = {entry["status"] for entry in decoded[1 : len(constraints) + 1]}
-    human = decoded[-1]["status"] if len(decoded) == pair_count else None
+
+def oasi_quality(
+    result_quality: int | str,
+    constraints: list[dict[str, Any]] | str | None = None,
+    legend: bool = False,
+) -> dict[str, Any] | None:
+    """Map a resultQuality bitmask to its OASI score (see OASI_QUALITY).
+
+    Takes the same inputs as ``decode_result_quality``. Returns
+    {"id": score, "status": level, "description": label}, plus "color" with
+    ``legend=True``, or None when the mask has no OASI equivalent.
+
+    Human review wins over the constraints:
+        human passed                         -> 10 HQC  good
+        human failed                         ->  6 HQC  corrupted
+        all constraints passed               ->  3 AQC1 good
+        some constraints failed, or only
+        some executed (rest passed)          ->  2 AQC1 suspect
+        all constraints failed               ->  1 AQC0 corrupted
+        data raw, no constraint executed     ->  0 AQC0 raw data
+
+    Example with 3 constraints, mask 1007 (human review passed):
+        -> {"id": 10, "status": "HQC", "description": "good"}
+    """
+    data, *rest = decode_result_quality(result_quality, constraints)
+    human = None
+    if rest and rest[-1]["description"] == "human review":
+        human = rest.pop()["status"]
+    checks = {entry["status"] for entry in rest}
+
     if human:
         score = {"passed": 10, "failed": 6}.get(human)
     elif checks == {"failed"}:
@@ -158,27 +165,14 @@ def decode_result_quality(
         score = 3
     elif "failed" in checks or checks == {"passed", "not executed"}:
         score = 2
-    elif decoded[0]["status"] == "raw" and checks <= {"not executed"}:
+    elif data["status"] == "raw" and checks <= {"not executed"}:
         score = 0
     else:
         score = None
     if score is None:
-        return []  # no OASI equivalent, same as no data
+        return None
     level, description, color = OASI_QUALITY[score]
-    entry = {"id": score, "status": level, "description": description}
+    result = {"id": score, "status": level, "description": description}
     if legend:
-        entry["color"] = color
-    return [entry]
-
-
-if __name__ == "__main__":
-    constraints1 = [
-        {"type": "flagRange", "min": 1, "max": 100},
-        {"type": "flagConstants", "thresh": 0.1},
-        {"type": "flagZScore", "thresh": 3, "center": False},
-    ]
-
-    print(decode_result_quality(243, constraints1, legend=True, oasi=True))
-    print(decode_result_quality(3, legend=True, oasi=True))
-    print(decode_result_quality(1007, constraints1, legend=True, oasi=True))
-    print(decode_result_quality(751, constraints1, legend=False, oasi=True))
+        result["color"] = color
+    return result

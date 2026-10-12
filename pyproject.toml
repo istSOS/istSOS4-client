@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "istsos4-client"
-version = "0.3.0"
+version = "0.4.0"
 description = "Python client for istSOS4 (OGC SensorThings API)"
 readme = "README.md"
 license = "Apache-2.0"
@@ -28,6 +28,9 @@ classifiers = [
     "Topic :: Scientific/Engineering :: GIS",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
 [project.urls]
 Homepage = "https://github.com/istSOS/istSOS4-client"
 Repository = "https://github.com/istSOS/istSOS4-client"
@@ -35,3 +38,6 @@ Issues = "https://github.com/istSOS/istSOS4-client/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/istsos4_client"]
+
+[tool.ruff]
+line-length = 79

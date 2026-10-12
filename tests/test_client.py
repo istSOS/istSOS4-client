@@ -25,6 +25,13 @@ def test_client_strips_trailing_slash():
     assert c.base_url == "http://example.com/v1.1"
 
 
+def test_context_manager_closes_session():
+    with patch("requests.Session.close") as close:
+        with Client("http://x") as c:
+            assert isinstance(c, Client)
+        close.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # headers
 # ---------------------------------------------------------------------------
@@ -44,7 +51,7 @@ def test_headers_with_auth():
             "Authorization": "Bearer tok"
         }
         c = Client("http://x", username="u", password="p")
-    auth_cls.assert_called_once_with("http://x/Login", "u", "p")
+    assert auth_cls.call_args.args == ("http://x/Login", "u", "p")
     assert c._headers("why") == {
         "Authorization": "Bearer tok",
         "commit-message": "why",
@@ -61,13 +68,11 @@ def test_post_sets_iot_id_from_location():
     resp = make_response(
         status=201, headers={"Location": "http://x/v1.1/Users(7)"}
     )
-    with patch(
-        "istsos4_client.client.requests.post", return_value=resp
-    ) as post:
-        status = Client("http://x/v1.1").post(user, commit_message="add a")
-    assert status == 201
+    with patch("requests.Session.request", return_value=resp) as post:
+        returned = Client("http://x/v1.1").post(user, commit_message="add a")
+    assert returned is user
     assert user.iot_id == 7
-    assert post.call_args.args[0] == "http://x/v1.1/Users"
+    assert post.call_args.args[1] == "http://x/v1.1/Users"
     assert post.call_args.kwargs["json"] == user.serialize()
     assert post.call_args.kwargs["headers"] == {"commit-message": "add a"}
 
@@ -76,9 +81,11 @@ def test_post_error_raises_with_body():
     user = User(username="a", role="viewer")
     resp = make_response(status=400)
     resp.text = "bad request"
-    with patch("istsos4_client.client.requests.post", return_value=resp):
-        with pytest.raises(requests.HTTPError, match="bad request"):
-            Client("http://x").post(user)
+    with (
+        patch("requests.Session.request", return_value=resp),
+        pytest.raises(requests.HTTPError, match="bad request"),
+    ):
+        Client("http://x").post(user)
     assert user.iot_id is None
 
 
@@ -89,13 +96,11 @@ def test_post_error_raises_with_body():
 
 def test_get_returns_entity():
     resp = make_response({"id": 3, "username": "a", "role": "viewer"})
-    with patch(
-        "istsos4_client.client.requests.get", return_value=resp
-    ) as get:
+    with patch("requests.Session.request", return_value=resp) as get:
         user = Client("http://x/v1.1").get(User, 3)
     assert isinstance(user, User)
     assert user.iot_id == 3
-    assert get.call_args.args[0] == "http://x/v1.1/Users(3)"
+    assert get.call_args.args[1] == "http://x/v1.1/Users(3)"
 
 
 def test_get_with_expand_embeds_related_entity():
@@ -114,12 +119,10 @@ def test_get_with_expand_embeds_related_entity():
             },
         }
     )
-    with patch(
-        "istsos4_client.client.requests.get", return_value=resp
-    ) as get:
+    with patch("requests.Session.request", return_value=resp) as get:
         obs = Client("http://x/v1.1").get(Observation, 7, expand="Datastream")
     assert (
-        get.call_args.args[0]
+        get.call_args.args[1]
         == "http://x/v1.1/Observations(7)?$expand=Datastream"
     )
     assert isinstance(obs.datastream, Datastream)
@@ -128,9 +131,11 @@ def test_get_with_expand_embeds_related_entity():
 
 def test_get_raises_on_http_error():
     resp = make_response(status=404)
-    with patch("istsos4_client.client.requests.get", return_value=resp):
-        with pytest.raises(requests.HTTPError):
-            Client("http://x").get(User, 99)
+    with (
+        patch("requests.Session.request", return_value=resp),
+        pytest.raises(requests.HTTPError),
+    ):
+        Client("http://x").get(User, 99)
 
 
 # ---------------------------------------------------------------------------
@@ -142,14 +147,14 @@ def test_list_single_page():
     resp = make_response(
         {"value": [{"id": 1, "username": "a", "role": "viewer"}]}
     )
-    with patch("istsos4_client.client.requests.get", return_value=resp):
+    with patch("requests.Session.request", return_value=resp):
         users = Client("http://x").list(User)
     assert [u.iot_id for u in users] == [1]
 
 
 def test_list_empty_value():
     with patch(
-        "istsos4_client.client.requests.get",
+        "requests.Session.request",
         return_value=make_response({"value": []}),
     ):
         assert Client("http://x").list(User) == []
@@ -165,12 +170,10 @@ def test_list_follows_next_link():
     page2 = make_response(
         {"value": [{"id": 2, "username": "b", "role": "viewer"}]}
     )
-    with patch(
-        "istsos4_client.client.requests.get", side_effect=[page1, page2]
-    ) as get:
+    with patch("requests.Session.request", side_effect=[page1, page2]) as get:
         users = Client("http://x/v1.1").list(User)
     assert [u.iot_id for u in users] == [1, 2]
-    assert get.call_args_list[1].args[0] == "http://x/v1.1/Users?$skip=1"
+    assert get.call_args_list[1].args[1] == "http://x/v1.1/Users?$skip=1"
 
 
 def test_list_passes_query_params_on_first_request_only():
@@ -181,28 +184,26 @@ def test_list_passes_query_params_on_first_request_only():
         }
     )
     page2 = make_response({"value": []})
-    with patch(
-        "istsos4_client.client.requests.get", side_effect=[page1, page2]
-    ) as get:
+    with patch("requests.Session.request", side_effect=[page1, page2]) as get:
         Client("http://x/v1.1").list(User, filter="f", orderby="id", top=10)
     assert (
-        get.call_args_list[0].args[0]
+        get.call_args_list[0].args[1]
         == "http://x/v1.1/Users?$filter=f&$orderby=id&$top=10"
     )
     # follow-up pages use the server's nextLink verbatim
     assert (
-        get.call_args_list[1].args[0]
+        get.call_args_list[1].args[1]
         == "http://x/v1.1/Users?$skip=1&$filter=f"
     )
 
 
 def test_list_encodes_spaces_as_percent20():
     with patch(
-        "istsos4_client.client.requests.get",
+        "requests.Session.request",
         return_value=make_response({"value": []}),
     ) as get:
         Client("http://x/v1.1").list(User, filter="id gt 1")
-    url = get.call_args_list[0].args[0]
+    url = get.call_args_list[0].args[1]
     assert "%20" in url and "+" not in url
 
 
@@ -216,9 +217,7 @@ def test_iter_list_streams_pages_lazily():
     page2 = make_response(
         {"value": [{"id": 2, "username": "b", "role": "viewer"}]}
     )
-    with patch(
-        "istsos4_client.client.requests.get", side_effect=[page1, page2]
-    ) as get:
+    with patch("requests.Session.request", side_effect=[page1, page2]) as get:
         stream = Client("http://x/v1.1").iter_list(User)
         assert next(stream).iot_id == 1
         # the second page is only fetched once the first is exhausted
@@ -228,12 +227,14 @@ def test_iter_list_streams_pages_lazily():
 
 
 def test_list_raises_on_http_error():
-    with patch(
-        "istsos4_client.client.requests.get",
-        return_value=make_response(status=500),
+    with (
+        patch(
+            "requests.Session.request",
+            return_value=make_response(status=500),
+        ),
+        pytest.raises(requests.HTTPError),
     ):
-        with pytest.raises(requests.HTTPError):
-            Client("http://x").list(User)
+        Client("http://x").list(User)
 
 
 # ---------------------------------------------------------------------------
@@ -254,12 +255,10 @@ def make_obs(datastream):
 def test_bulk_observations_posts_data_array():
     obs = [make_obs(5), make_obs(5)]
     resp = make_response(status=201)
-    with patch(
-        "istsos4_client.client.requests.post", return_value=resp
-    ) as post:
+    with patch("requests.Session.request", return_value=resp) as post:
         sent = Client("http://x/v1.1").bulk_observations(obs)
     assert sent == 2
-    assert post.call_args.args[0] == "http://x/v1.1/BulkObservations"
+    assert post.call_args.args[1] == "http://x/v1.1/BulkObservations"
     assert post.call_args.kwargs["json"] == [
         {
             "Datastream": {"@iot.id": 5},
@@ -276,9 +275,7 @@ def test_bulk_observations_posts_data_array():
 def test_bulk_observations_groups_datastreams_and_splits_batches():
     resp = make_response(status=201)
     obs = [make_obs(1)] * (MAX_ROWS_PER_BULK + 1) + [make_obs(2)]
-    with patch(
-        "istsos4_client.client.requests.post", return_value=resp
-    ) as post:
+    with patch("requests.Session.request", return_value=resp) as post:
         sent = Client("http://x").bulk_observations(obs)
     assert sent == MAX_ROWS_PER_BULK + 2
     # datastream 1 needs two requests (over the row cap), datastream 2 one
@@ -289,12 +286,14 @@ def test_bulk_observations_groups_datastreams_and_splits_batches():
 
 
 def test_bulk_observations_raises_on_http_error():
-    with patch(
-        "istsos4_client.client.requests.post",
-        return_value=make_response(status=500),
+    with (
+        patch(
+            "requests.Session.request",
+            return_value=make_response(status=500),
+        ),
+        pytest.raises(requests.HTTPError),
     ):
-        with pytest.raises(requests.HTTPError):
-            Client("http://x").bulk_observations([make_obs(1)])
+        Client("http://x").bulk_observations([make_obs(1)])
 
 
 def test_bulk_observations_rejects_missing_phenomenon_time():
@@ -325,14 +324,12 @@ def test_patch_sends_only_the_fields_that_are_set():
     from istsos4_client.models import Observation
 
     resp = make_response(status=200)
-    with patch(
-        "istsos4_client.client.requests.patch", return_value=resp
-    ) as req:
-        status = Client("http://x/v1.1").patch(
+    with patch("requests.Session.request", return_value=resp) as req:
+        Client("http://x/v1.1").patch(
             Observation(iot_id=7, result=1.5, result_quality="100")
         )
-    assert status == 200
-    assert req.call_args.args[0] == "http://x/v1.1/Observations(7)"
+    assert req.call_args.args[0] == "PATCH"
+    assert req.call_args.args[1] == "http://x/v1.1/Observations(7)"
     assert req.call_args.kwargs["json"] == {
         "result": 1.5,
         "resultQuality": "100",
@@ -343,14 +340,12 @@ def test_patch_with_filter():
     from istsos4_client.models import Observation
 
     resp = make_response(status=200)
-    with patch(
-        "istsos4_client.client.requests.patch", return_value=resp
-    ) as req:
+    with patch("requests.Session.request", return_value=resp) as req:
         Client("http://x/v1.1").patch(
             Observation(iot_id=7, result=1.5),
             filter="phenomenonTime eq '2026-07-15T10:00:00Z'",
         )
-    assert req.call_args.args[0] == (
+    assert req.call_args.args[1] == (
         "http://x/v1.1/Observations(7)"
         "?$filter=phenomenonTime%20eq%20%272026-07-15T10%3A00%3A00Z%27"
     )
@@ -364,9 +359,25 @@ def test_patch_without_iot_id_raises():
 def test_patch_raises_on_http_error():
     resp = make_response(status=409)
     resp.text = "conflict"
-    with patch("istsos4_client.client.requests.patch", return_value=resp):
-        with pytest.raises(requests.HTTPError, match="conflict"):
-            Client("http://x").patch(User(iot_id=1, username="a", role="v"))
+    with (
+        patch("requests.Session.request", return_value=resp),
+        pytest.raises(requests.HTTPError, match="conflict"),
+    ):
+        Client("http://x").patch(User(iot_id=1, username="a", role="v"))
+
+
+# ---------------------------------------------------------------------------
+# delete
+# ---------------------------------------------------------------------------
+
+
+def test_delete_by_id():
+    with patch(
+        "requests.Session.request", return_value=make_response(status=200)
+    ) as req:
+        Client("http://x/v1.1").delete(User, 3, commit_message="cleanup")
+    assert req.call_args.args == ("DELETE", "http://x/v1.1/Users(3)")
+    assert req.call_args.kwargs["headers"] == {"commit-message": "cleanup"}
 
 
 # ---------------------------------------------------------------------------
@@ -391,7 +402,7 @@ def test_staplus_entities_need_opt_in():
         ),
     )
     c = Client("http://x")
-    with patch("istsos4_client.client.requests") as req:
+    with patch("requests.Session.request") as req:
         for call in (
             lambda: c.post(party),
             lambda: c.post(obs),
@@ -400,13 +411,12 @@ def test_staplus_entities_need_opt_in():
         ):
             with pytest.raises(ValueError, match="staplus=True"):
                 call()
-        req.post.assert_not_called()
-        req.get.assert_not_called()
+        req.assert_not_called()
 
-        req.post.return_value = make_response(
+        req.return_value = make_response(
             status=201, headers={"Location": "http://x/Parties(5)"}
         )
-        assert Client("http://x", staplus=True).post(party) == 201
+        assert Client("http://x", staplus=True).post(party) is party
     assert party.iot_id == 5
 
 
@@ -417,41 +427,79 @@ def test_staplus_entities_need_opt_in():
 
 def test_retries_unavailable_and_connection_errors_then_succeeds():
     ok = make_response({"value": []})
-    with patch(
-        "istsos4_client.client.requests.get",
-        side_effect=[make_response(status=503), requests.ConnectionError(), ok],
-    ) as get, patch("istsos4_client.client.time.sleep") as sleep:
+    with (
+        patch(
+            "requests.Session.request",
+            side_effect=[
+                make_response(status=503),
+                requests.ConnectionError(),
+                ok,
+            ],
+        ) as get,
+        patch("istsos4_client.client.time.sleep") as sleep,
+    ):
         assert Client("http://x", retry_delay=2).list(User) == []
     assert get.call_count == 3
     assert [c.args for c in sleep.call_args_list] == [(2,), (2,)]
 
 
 def test_gives_up_after_max_retries():
-    with patch(
-        "istsos4_client.client.requests.get",
-        return_value=make_response(status=503),
-    ) as get, patch("istsos4_client.client.time.sleep"):
-        with pytest.raises(requests.HTTPError):
-            Client("http://x", max_retries=2).get(User, 1)
+    with (
+        patch(
+            "requests.Session.request",
+            return_value=make_response(status=503),
+        ) as get,
+        patch("istsos4_client.client.time.sleep"),
+        pytest.raises(requests.HTTPError),
+    ):
+        Client("http://x", max_retries=2).get(User, 1)
     assert get.call_count == 3  # first try + 2 retries
 
 
 def test_last_connection_error_is_raised():
-    with patch(
-        "istsos4_client.client.requests.get",
-        side_effect=requests.ConnectionError("down"),
-    ) as get, patch("istsos4_client.client.time.sleep"):
-        with pytest.raises(requests.ConnectionError):
-            Client("http://x", max_retries=1).get(User, 1)
+    with (
+        patch(
+            "requests.Session.request",
+            side_effect=requests.ConnectionError("down"),
+        ) as get,
+        patch("istsos4_client.client.time.sleep"),
+        pytest.raises(requests.ConnectionError),
+    ):
+        Client("http://x", max_retries=1).get(User, 1)
     assert get.call_count == 2
 
 
+def test_login_uses_client_timeout_and_retries():
+    token = make_response({"access_token": "tok", "expires_in": 3600})
+    with (
+        patch(
+            "requests.Session.request",
+            side_effect=[
+                requests.ConnectTimeout(),
+                token,
+                make_response({"id": 1, "username": "a", "role": "v"}),
+            ],
+        ) as req,
+        patch("istsos4_client.client.time.sleep"),
+    ):
+        Client("http://x", username="u", password="p", timeout=5).get(User, 1)
+    login = req.call_args_list[1]
+    assert login.args == ("POST", "http://x/Login")
+    assert login.kwargs["timeout"] == 5
+    assert req.call_args.kwargs["headers"] == {"Authorization": "Bearer tok"}
+
+
 def test_no_retry_on_500_or_when_disabled():
-    for client, status in ((Client("http://x"), 500), (Client("http://x", max_retries=0), 503)):
-        with patch(
-            "istsos4_client.client.requests.get",
-            return_value=make_response(status=status),
-        ) as get:
-            with pytest.raises(requests.HTTPError):
-                client.get(User, 1)
+    for client, status in (
+        (Client("http://x"), 500),
+        (Client("http://x", max_retries=0), 503),
+    ):
+        with (
+            patch(
+                "requests.Session.request",
+                return_value=make_response(status=status),
+            ) as get,
+            pytest.raises(requests.HTTPError),
+        ):
+            client.get(User, 1)
         assert get.call_count == 1

@@ -30,13 +30,22 @@ client = Client(
 )
 ```
 
-The bearer token is fetched and refreshed automatically.
+The bearer token is fetched and refreshed automatically. Login uses the
+same timeout and retries as every other request.
 
 Requests that fail with a connection error, a timeout or a 408, 429, 502,
 503 or 504 response are retried, by default 3 times, 1 second apart:
 
 ```python
 client = Client(url, max_retries=5, retry_delay=2.0)  # max_retries=0 disables it
+```
+
+The client keeps connections open for reuse. Close them with `client.close()`,
+or use it as a context manager:
+
+```python
+with Client(url) as client:
+    ...
 ```
 
 ### Create entities
@@ -47,8 +56,8 @@ from istsos4_client import (
     UnitOfMeasurement, Observation,
 )
 
-thing = Thing(name="Weather station", description="Station on the roof")
-client.post(thing)          # thing.iot_id is set from the response
+thing = client.post(Thing(name="Weather station", description="Station on the roof"))
+thing.iot_id                # set from the response
 
 sensor = Sensor(name="DHT22", encoding_type="application/pdf")
 client.post(sensor)
@@ -108,6 +117,7 @@ observations were sent:
 
 ```python
 sent = client.bulk_observations([obs1, obs2, obs3])
+sent = client.bulk_observations(observations, force=True)  # adds ?force=true
 ```
 
 ### Read entities
@@ -143,7 +153,7 @@ observations = client.list(
 ```
 
 Supported options: `filter`, `select`, `orderby`, `expand`, `top`
-(`get()` takes `expand` only).
+(`get()` takes `expand` and `filter`, `patch()` takes `filter`).
 Field names in query strings use the server's camelCase form
 (`phenomenonTime`, not `phenomenon_time`). Note that `select` must keep
 the fields the model requires, and `top` sets the server page size —
@@ -163,11 +173,48 @@ Only the fields that are set are sent, so a partial update needs no read:
 client.patch(Observation(iot_id=7, result=1.5, result_quality="100"))
 ```
 
+`filter` is passed through as OData `$filter`:
+
+```python
+client.patch(
+    Observation(iot_id=7, result=1.5),
+    filter="phenomenonTime eq '2026-07-15T10:00:00Z'",
+)
+```
+
+### Delete entities
+
+```python
+client.delete(Thing, 1)
+```
+
+Options after the entity (`commit_message`, `filter`, `expand`, `force`, ...)
+are keyword-only on every method.
+
 ### Errors
 
-`get`, `list`, `post`, `patch` and `bulk_observations` raise
+`get`, `list`, `post`, `patch`, `delete` and `bulk_observations` raise
 `requests.HTTPError` on a non-2xx response, with the server's error body in
 the message and the response itself on `exc.response`.
+
+### Result quality
+
+`decode_result_quality` turns a resultQuality bitmask into one readable entry
+per 2-bit pair (data state, each constraint, human review). `oasi_quality`
+maps the same mask to a single OASI score, or `None` when there is none:
+
+```python
+from istsos4_client import decode_result_quality, oasi_quality
+
+constraints = [...]   # the datastream's constraints, list or JSON string
+decode_result_quality(1007, constraints, legend=True)
+# [{"id": 0, "status": "raw", "description": "data state", "color": ...}, ...]
+oasi_quality(1007, constraints)
+# {"id": 10, "status": "HQC", "description": "good"}
+```
+
+`status_colors=[...]` replaces the legend colors; see the function's
+docstring for the order.
 
 ### Time intervals
 
